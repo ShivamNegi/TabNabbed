@@ -1,0 +1,13 @@
+{
+    "name": "Extension Demo",
+    "version": "1.0",
+    "description": "Built to mitigate Tabnabbing",
+    "permissions": ["activeTab"],
+    "browser_action": {
+        "default_popup": "popup.html",
+        "default_icon": {
+            "16": "img/blue.png"
+        }
+    },
+    "manifest_version": 3
+}
