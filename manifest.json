@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "Highligh Tabnabbing",
+    "name": "Highlight Tabnabbing",
     "version": "0.1",    
     "description": "Built to mitigate Tabnabbing",
     "permissions": [
