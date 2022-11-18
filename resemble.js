@@ -3,7 +3,51 @@ James Cryer / Huddle
 URL: https://github.com/Huddle/Resemble.js
 */
 
-(function(root, factory) {
+var naiveFallback = function () {
+    // ISC (c) 2011-2019 https://github.com/medikoo/es5-ext/blob/master/global.js
+    if (typeof self === "object" && self) {
+        return self;
+    }
+    if (typeof window === "object" && window) {
+        return window;
+    }
+    throw new Error("Unable to resolve global `this`");
+};
+
+var getGlobalThis = function () {
+    // ISC (c) 2011-2019 https://github.com/medikoo/es5-ext/blob/master/global.js
+    // Fallback to standard globalThis if available
+    if (typeof globalThis === "object" && globalThis) {
+        return globalThis;
+    }
+
+    try {
+        Object.defineProperty(Object.prototype, "__global__", {
+            get: function () {
+                return this;
+            },
+            configurable: true
+        });
+    } catch (error) {
+        return naiveFallback();
+    }
+    try {
+        // eslint-disable-next-line no-undef
+        if (!__global__) {
+            return naiveFallback();
+        }
+        return __global__; // eslint-disable-line no-undef
+    } finally {
+        delete Object.prototype.__global__;
+    }
+};
+
+var isNode = function () {
+    const globalPolyfill = getGlobalThis();
+    return typeof globalPolyfill.process !== "undefined" && globalPolyfill.process.versions && globalPolyfill.process.versions.node;
+};
+
+(function (root, factory) {
     "use strict";
     if (typeof define === "function" && define.amd) {
         define([], factory);
@@ -12,42 +56,36 @@ URL: https://github.com/Huddle/Resemble.js
     } else {
         root.resemble = factory();
     }
-})(this, function() {
+})(this /* eslint-disable-line no-invalid-this*/, function () {
     "use strict";
 
     var Img;
     var Canvas;
+    var loadNodeCanvasImage;
 
-    if (typeof Image !== "undefined") {
-        Img = Image;
-    } else {
-        Canvas = require("canvas-prebuilt"); // eslint-disable-line global-require
+    if (isNode()) {
+        Canvas = require("canvas"); // eslint-disable-line global-require
         Img = Canvas.Image;
+        loadNodeCanvasImage = Canvas.loadImage;
+    } else {
+        Img = Image;
     }
 
-    var document =
-        typeof window !== "undefined"
-            ? window.document
-            : {
-                  createElement: function() {
-                      // This will work as long as only createElement is used on window.document
-                      return new Canvas();
-                  }
-              };
+    function createCanvas(width, height) {
+        if (isNode()) {
+            return Canvas.createCanvas(width, height);
+        }
+
+        var cnvs = document.createElement("canvas");
+        cnvs.width = width;
+        cnvs.height = height;
+        return cnvs;
+    }
 
     var oldGlobalSettings = {};
     var globalOutputSettings = oldGlobalSettings;
 
-    function setGlobalOutputSettings(settings) {
-        var msg =
-            "warning resemble.outputSettings mutates global state, and " +
-            "will be removed in 3.0.0";
-        console.warn(msg);
-        globalOutputSettings = settings;
-        return this;
-    }
-
-    var resemble = function(fileData) {
+    var resemble = function (fileData) {
         var pixelTransparency = 1;
 
         var errorPixelColor = {
@@ -60,86 +98,34 @@ URL: https://github.com/Huddle/Resemble.js
 
         var targetPix = { r: 0, g: 0, b: 0, a: 0 }; // isAntialiased
 
-        function colorsDistance(c1, c2) {
-            return (
-                (Math.abs(c1.r - c2.r) +
-                    Math.abs(c1.g - c2.g) +
-                    Math.abs(c1.b - c2.b)) /
-                3
-            );
-        }
-
-        function withinBoundingBox(x, y, width, height, box) {
-            return (
-                x > (box.left || 0) &&
-                x < (box.right || width) &&
-                y > (box.top || 0) &&
-                y < (box.bottom || height)
-            );
-        }
-
-        function withinComparedArea(x, y, width, height) {
-            var isIncluded = true;
-
-            if (
-                boundingBox !== undefined &&
-                !withinBoundingBox(x, y, width, height, boundingBox)
-            ) {
-                isIncluded = false;
-            }
-
-            if (
-                ignoredBox !== undefined &&
-                withinBoundingBox(x, y, width, height, ignoredBox)
-            ) {
-                isIncluded = false;
-            }
-
-            return isIncluded;
-        }
-
         var errorPixelTransform = {
-            flat: function(px, offset) {
+            flat: function (px, offset) {
                 px[offset] = errorPixelColor.red;
                 px[offset + 1] = errorPixelColor.green;
                 px[offset + 2] = errorPixelColor.blue;
                 px[offset + 3] = errorPixelColor.alpha;
             },
-            movement: function(px, offset, d1, d2) {
-                px[offset] =
-                    (d2.r * (errorPixelColor.red / 255) + errorPixelColor.red) /
-                    2;
-                px[offset + 1] =
-                    (d2.g * (errorPixelColor.green / 255) +
-                        errorPixelColor.green) /
-                    2;
-                px[offset + 2] =
-                    (d2.b * (errorPixelColor.blue / 255) +
-                        errorPixelColor.blue) /
-                    2;
+            movement: function (px, offset, d1, d2) {
+                px[offset] = (d2.r * (errorPixelColor.red / 255) + errorPixelColor.red) / 2;
+                px[offset + 1] = (d2.g * (errorPixelColor.green / 255) + errorPixelColor.green) / 2;
+                px[offset + 2] = (d2.b * (errorPixelColor.blue / 255) + errorPixelColor.blue) / 2;
                 px[offset + 3] = d2.a;
             },
-            flatDifferenceIntensity: function(px, offset, d1, d2) {
+            flatDifferenceIntensity: function (px, offset, d1, d2) {
                 px[offset] = errorPixelColor.red;
                 px[offset + 1] = errorPixelColor.green;
                 px[offset + 2] = errorPixelColor.blue;
                 px[offset + 3] = colorsDistance(d1, d2);
             },
-            movementDifferenceIntensity: function(px, offset, d1, d2) {
-                var ratio = colorsDistance(d1, d2) / 255 * 0.8;
+            movementDifferenceIntensity: function (px, offset, d1, d2) {
+                var ratio = (colorsDistance(d1, d2) / 255) * 0.8;
 
-                px[offset] =
-                    (1 - ratio) * (d2.r * (errorPixelColor.red / 255)) +
-                    ratio * errorPixelColor.red;
-                px[offset + 1] =
-                    (1 - ratio) * (d2.g * (errorPixelColor.green / 255)) +
-                    ratio * errorPixelColor.green;
-                px[offset + 2] =
-                    (1 - ratio) * (d2.b * (errorPixelColor.blue / 255)) +
-                    ratio * errorPixelColor.blue;
+                px[offset] = (1 - ratio) * (d2.r * (errorPixelColor.red / 255)) + ratio * errorPixelColor.red;
+                px[offset + 1] = (1 - ratio) * (d2.g * (errorPixelColor.green / 255)) + ratio * errorPixelColor.green;
+                px[offset + 2] = (1 - ratio) * (d2.b * (errorPixelColor.blue / 255)) + ratio * errorPixelColor.blue;
                 px[offset + 3] = d2.a;
             },
-            diffOnly: function(px, offset, d1, d2) {
+            diffOnly: function (px, offset, d1, d2) {
                 px[offset] = d2.r;
                 px[offset + 1] = d2.g;
                 px[offset + 2] = d2.b;
@@ -149,8 +135,9 @@ URL: https://github.com/Huddle/Resemble.js
 
         var errorPixel = errorPixelTransform.flat;
         var errorType;
-        var boundingBox;
-        var ignoredBox;
+        var boundingBoxes;
+        var ignoredBoxes;
+        var ignoreAreasColoredWith;
         var largeImageThreshold = 1200;
         var useCrossOrigin = true;
         var data = {};
@@ -170,6 +157,64 @@ URL: https://github.com/Huddle/Resemble.js
         var ignoreAntialiasing = false;
         var ignoreColors = false;
         var scaleToSameSize = false;
+        var compareOnly = false;
+        var returnEarlyThreshold;
+
+        function colorsDistance(c1, c2) {
+            return (Math.abs(c1.r - c2.r) + Math.abs(c1.g - c2.g) + Math.abs(c1.b - c2.b)) / 3;
+        }
+
+        function withinBoundingBox(x, y, width, height, box) {
+            return x > (box.left || 0) && x < (box.right || width) && y > (box.top || 0) && y < (box.bottom || height);
+        }
+
+        function withinComparedArea(x, y, width, height, pixel2) {
+            var isIncluded = true;
+            var i;
+            var boundingBox;
+            var ignoredBox;
+            var selected;
+            var ignored;
+
+            if (boundingBoxes instanceof Array) {
+                selected = false;
+                for (i = 0; i < boundingBoxes.length; i++) {
+                    boundingBox = boundingBoxes[i];
+                    if (withinBoundingBox(x, y, width, height, boundingBox)) {
+                        selected = true;
+                        break;
+                    }
+                }
+            }
+            if (ignoredBoxes instanceof Array) {
+                ignored = true;
+                for (i = 0; i < ignoredBoxes.length; i++) {
+                    ignoredBox = ignoredBoxes[i];
+                    if (withinBoundingBox(x, y, width, height, ignoredBox)) {
+                        ignored = false;
+                        break;
+                    }
+                }
+            }
+
+            if (ignoreAreasColoredWith) {
+                return colorsDistance(pixel2, ignoreAreasColoredWith) !== 0;
+            }
+
+            if (selected === undefined && ignored === undefined) {
+                return true;
+            }
+            if (selected === false && ignored === true) {
+                return false;
+            }
+            if (selected === true || ignored === true) {
+                isIncluded = true;
+            }
+            if (selected === false || ignored === false) {
+                isIncluded = false;
+            }
+            return isIncluded;
+        }
 
         function triggerDataUpdate() {
             var len = updateCallbackArray.length;
@@ -202,7 +247,7 @@ URL: https://github.com/Huddle/Resemble.js
             var whiteTotal = 0;
             var blackTotal = 0;
 
-            loop(width, height, function(horizontalPos, verticalPos) {
+            loop(width, height, function (horizontalPos, verticalPos) {
                 var offset = (verticalPos * width + horizontalPos) * 4;
                 var red = sourceImageData[offset];
                 var green = sourceImageData[offset + 1];
@@ -220,11 +265,11 @@ URL: https://github.com/Huddle/Resemble.js
 
                 pixelCount++;
 
-                redTotal += red / 255 * 100;
-                greenTotal += green / 255 * 100;
-                blueTotal += blue / 255 * 100;
-                alphaTotal += (255 - alpha) / 255 * 100;
-                brightnessTotal += brightness / 255 * 100;
+                redTotal += (red / 255) * 100;
+                greenTotal += (green / 255) * 100;
+                blueTotal += (blue / 255) * 100;
+                alphaTotal += ((255 - alpha) / 255) * 100;
+                brightnessTotal += (brightness / 255) * 100;
             });
 
             data.red = Math.floor(redTotal / pixelCount);
@@ -232,10 +277,31 @@ URL: https://github.com/Huddle/Resemble.js
             data.blue = Math.floor(blueTotal / pixelCount);
             data.alpha = Math.floor(alphaTotal / pixelCount);
             data.brightness = Math.floor(brightnessTotal / pixelCount);
-            data.white = Math.floor(whiteTotal / pixelCount * 100);
-            data.black = Math.floor(blackTotal / pixelCount * 100);
+            data.white = Math.floor((whiteTotal / pixelCount) * 100);
+            data.black = Math.floor((blackTotal / pixelCount) * 100);
 
             triggerDataUpdate();
+        }
+
+        function onLoadImage(hiddenImage, callback) {
+            // don't assign to hiddenImage, see https://github.com/Huddle/Resemble.js/pull/87/commits/300d43352a2845aad289b254bfbdc7cd6a37e2d7
+            var width = hiddenImage.width;
+            var height = hiddenImage.height;
+
+            if (scaleToSameSize && images.length === 1) {
+                width = images[0].width;
+                height = images[0].height;
+            }
+
+            var hiddenCanvas = createCanvas(width, height);
+            var imageData;
+
+            hiddenCanvas.getContext("2d").drawImage(hiddenImage, 0, 0, width, height);
+            imageData = hiddenCanvas.getContext("2d").getImageData(0, 0, width, height);
+
+            images.push(imageData);
+
+            callback(imageData, width, height);
         }
 
         function loadImageData(fileDataForImage, callback) {
@@ -250,47 +316,23 @@ URL: https://github.com/Huddle/Resemble.js
                 hiddenImage.setAttribute("crossorigin", "anonymous");
             }
 
-            hiddenImage.onerror = function(err) {
+            hiddenImage.onerror = function (event) {
                 hiddenImage.onload = null;
                 hiddenImage.onerror = null; // fixes pollution between calls
-                images.push({ error: err ? err + "" : "Image load error." });
+                const error = event ? event + "" : "Unknown error";
+                images.push({ error: `Failed to load image '${fileDataForImage}'. ${error}` });
                 callback();
             };
 
-            hiddenImage.onload = function() {
+            hiddenImage.onload = function () {
                 hiddenImage.onload = null; // fixes pollution between calls
                 hiddenImage.onerror = null;
-
-                var hiddenCanvas = document.createElement("canvas");
-                var imageData;
-
-                // don't assign to hiddenImage, see https://github.com/Huddle/Resemble.js/pull/87/commits/300d43352a2845aad289b254bfbdc7cd6a37e2d7
-                var width = hiddenImage.width;
-                var height = hiddenImage.height;
-
-                if (scaleToSameSize && images.length === 1) {
-                    width = images[0].width;
-                    height = images[0].height;
-                }
-
-                hiddenCanvas.width = width;
-                hiddenCanvas.height = height;
-
-                hiddenCanvas
-                    .getContext("2d")
-                    .drawImage(hiddenImage, 0, 0, width, height);
-                imageData = hiddenCanvas
-                    .getContext("2d")
-                    .getImageData(0, 0, width, height);
-
-                images.push(imageData);
-
-                callback(imageData, width, height);
+                onLoadImage(hiddenImage, callback);
             };
 
             if (typeof fileDataForImage === "string") {
                 hiddenImage.src = fileDataForImage;
-                if (hiddenImage.complete && hiddenImage.naturalWidth > 0) {
+                if (!isNode() && hiddenImage.complete && hiddenImage.naturalWidth > 0) {
                     hiddenImage.onload();
                 }
             } else if (
@@ -300,20 +342,26 @@ URL: https://github.com/Huddle/Resemble.js
             ) {
                 images.push(fileDataForImage);
 
-                callback(
-                    fileDataForImage,
-                    fileDataForImage.width,
-                    fileDataForImage.height
-                );
-            } else if (
-                typeof Buffer !== "undefined" &&
-                fileDataForImage instanceof Buffer
-            ) {
+                callback(fileDataForImage, fileDataForImage.width, fileDataForImage.height);
+            } else if (typeof Buffer !== "undefined" && fileDataForImage instanceof Buffer) {
                 // If we have Buffer, assume we're on Node+Canvas and its supported
-                hiddenImage.src = fileDataForImage;
+                // hiddenImage.src = fileDataForImage;
+
+                loadNodeCanvasImage(fileDataForImage)
+                    .then(function (image) {
+                        hiddenImage.onload = null; // fixes pollution between calls
+                        hiddenImage.onerror = null;
+                        onLoadImage(image, callback);
+                    })
+                    .catch(function (err) {
+                        images.push({
+                            error: err ? err + "" : "Image load error."
+                        });
+                        callback();
+                    });
             } else {
                 fileReader = new FileReader();
-                fileReader.onload = function(event) {
+                fileReader.onload = function (event) {
                     hiddenImage.src = event.target.result;
                 };
                 fileReader.readAsDataURL(fileDataForImage);
@@ -340,11 +388,7 @@ URL: https://github.com/Huddle/Resemble.js
 
         function isPixelBrightnessSimilar(d1, d2) {
             var alpha = isColorSimilar(d1.a, d2.a, "alpha");
-            var brightness = isColorSimilar(
-                d1.brightness,
-                d2.brightness,
-                "minBrightness"
-            );
+            var brightness = isColorSimilar(d1.brightness, d2.brightness, "minBrightness");
             return brightness && alpha;
         }
 
@@ -369,10 +413,7 @@ URL: https://github.com/Huddle/Resemble.js
         }
 
         function isContrasting(d1, d2) {
-            return (
-                Math.abs(d1.brightness - d2.brightness) >
-                tolerance.maxBrightness
-            );
+            return Math.abs(d1.brightness - d2.brightness) > tolerance.maxBrightness;
         }
 
         function getHue(red, green, blue) {
@@ -406,14 +447,7 @@ URL: https://github.com/Huddle/Resemble.js
             return h;
         }
 
-        function isAntialiased(
-            sourcePix,
-            pix,
-            cacheSet,
-            verticalPos,
-            horizontalPos,
-            width
-        ) {
+        function isAntialiased(sourcePix, pix, cacheSet, verticalPos, horizontalPos, width) {
             var offset;
             var distance = 1;
             var i;
@@ -429,9 +463,7 @@ URL: https://github.com/Huddle/Resemble.js
                     if (i === 0 && j === 0) {
                         // ignore source pixel
                     } else {
-                        offset =
-                            ((verticalPos + j) * width + (horizontalPos + i)) *
-                            4;
+                        offset = ((verticalPos + j) * width + (horizontalPos + i)) * 4;
 
                         if (!getPixelInfo(targetPix, pix, offset, cacheSet)) {
                             continue;
@@ -452,10 +484,7 @@ URL: https://github.com/Huddle/Resemble.js
                             hasSiblingWithDifferentHue++;
                         }
 
-                        if (
-                            hasSiblingWithDifferentHue > 1 ||
-                            hasHighContrastSibling > 1
-                        ) {
+                        if (hasSiblingWithDifferentHue > 1 || hasHighContrastSibling > 1) {
                             return true;
                         }
                     }
@@ -513,17 +542,20 @@ URL: https://github.com/Huddle/Resemble.js
         }
 
         function analyseImages(img1, img2, width, height) {
-            var hiddenCanvas = document.createElement("canvas");
-
             var data1 = img1.data;
             var data2 = img2.data;
+            var hiddenCanvas;
+            var context;
+            var imgd;
+            var pix;
 
-            hiddenCanvas.width = width;
-            hiddenCanvas.height = height;
+            if (!compareOnly) {
+                hiddenCanvas = createCanvas(width, height);
 
-            var context = hiddenCanvas.getContext("2d");
-            var imgd = context.createImageData(width, height);
-            var pix = imgd.data;
+                context = hiddenCanvas.getContext("2d");
+                imgd = context.createImageData(width, height);
+                pix = imgd.data;
+            }
 
             var mismatchCount = 0;
             var diffBounds = {
@@ -532,7 +564,7 @@ URL: https://github.com/Huddle/Resemble.js
                 bottom: 0,
                 right: 0
             };
-            var updateBounds = function(x, y) {
+            var updateBounds = function (x, y) {
                 diffBounds.left = Math.min(x, diffBounds.left);
                 diffBounds.right = Math.max(x, diffBounds.right);
                 diffBounds.top = Math.min(y, diffBounds.top);
@@ -543,54 +575,47 @@ URL: https://github.com/Huddle/Resemble.js
 
             var skip;
 
-            if (
-                !!largeImageThreshold &&
-                ignoreAntialiasing &&
-                (width > largeImageThreshold || height > largeImageThreshold)
-            ) {
+            if (!!largeImageThreshold && ignoreAntialiasing && (width > largeImageThreshold || height > largeImageThreshold)) {
                 skip = 6;
             }
 
             var pixel1 = { r: 0, g: 0, b: 0, a: 0 };
             var pixel2 = { r: 0, g: 0, b: 0, a: 0 };
 
-            loop(width, height, function(horizontalPos, verticalPos) {
+            var skipTheRest = false;
+
+            loop(width, height, function (horizontalPos, verticalPos) {
+                if (skipTheRest) {
+                    return;
+                }
+
                 if (skip) {
                     // only skip if the image isn't small
-                    if (
-                        verticalPos % skip === 0 ||
-                        horizontalPos % skip === 0
-                    ) {
+                    if (verticalPos % skip === 0 || horizontalPos % skip === 0) {
                         return;
                     }
                 }
 
                 var offset = (verticalPos * width + horizontalPos) * 4;
-                var isWithinComparedArea = withinComparedArea(
-                    horizontalPos,
-                    verticalPos,
-                    width,
-                    height
-                );
-
-                if (
-                    !getPixelInfo(pixel1, data1, offset, 1) ||
-                    !getPixelInfo(pixel2, data2, offset, 2)
-                ) {
+                if (!getPixelInfo(pixel1, data1, offset, 1) || !getPixelInfo(pixel2, data2, offset, 2)) {
                     return;
                 }
+
+                var isWithinComparedArea = withinComparedArea(horizontalPos, verticalPos, width, height, pixel2);
 
                 if (ignoreColors) {
                     addBrightnessInfo(pixel1);
                     addBrightnessInfo(pixel2);
 
-                    if (
-                        isPixelBrightnessSimilar(pixel1, pixel2) ||
-                        !isWithinComparedArea
-                    ) {
-                        copyGrayScalePixel(pix, offset, pixel2);
+                    if (isPixelBrightnessSimilar(pixel1, pixel2) || !isWithinComparedArea) {
+                        if (!compareOnly) {
+                            copyGrayScalePixel(pix, offset, pixel2);
+                        }
                     } else {
-                        errorPixel(pix, offset, pixel1, pixel2);
+                        if (!compareOnly) {
+                            errorPixel(pix, offset, pixel1, pixel2);
+                        }
+
                         mismatchCount++;
                         updateBounds(horizontalPos, verticalPos);
                     }
@@ -598,51 +623,55 @@ URL: https://github.com/Huddle/Resemble.js
                 }
 
                 if (isRGBSimilar(pixel1, pixel2) || !isWithinComparedArea) {
-                    copyPixel(pix, offset, pixel1);
+                    if (!compareOnly) {
+                        copyPixel(pix, offset, pixel1);
+                    }
                 } else if (
                     ignoreAntialiasing &&
                     (addBrightnessInfo(pixel1), // jit pixel info augmentation looks a little weird, sorry.
                     addBrightnessInfo(pixel2),
-                    isAntialiased(
-                        pixel1,
-                        data1,
-                        1,
-                        verticalPos,
-                        horizontalPos,
-                        width
-                    ) ||
-                        isAntialiased(
-                            pixel2,
-                            data2,
-                            2,
-                            verticalPos,
-                            horizontalPos,
-                            width
-                        ))
+                    isAntialiased(pixel1, data1, 1, verticalPos, horizontalPos, width) || isAntialiased(pixel2, data2, 2, verticalPos, horizontalPos, width))
                 ) {
-                    if (
-                        isPixelBrightnessSimilar(pixel1, pixel2) ||
-                        !isWithinComparedArea
-                    ) {
-                        copyGrayScalePixel(pix, offset, pixel2);
+                    if (isPixelBrightnessSimilar(pixel1, pixel2) || !isWithinComparedArea) {
+                        if (!compareOnly) {
+                            copyGrayScalePixel(pix, offset, pixel2);
+                        }
                     } else {
-                        errorPixel(pix, offset, pixel1, pixel2);
+                        if (!compareOnly) {
+                            errorPixel(pix, offset, pixel1, pixel2);
+                        }
+
                         mismatchCount++;
                         updateBounds(horizontalPos, verticalPos);
                     }
                 } else {
-                    errorPixel(pix, offset, pixel1, pixel2);
+                    if (!compareOnly) {
+                        errorPixel(pix, offset, pixel1, pixel2);
+                    }
+
                     mismatchCount++;
                     updateBounds(horizontalPos, verticalPos);
                 }
+
+                if (compareOnly) {
+                    var currentMisMatchPercent = (mismatchCount / (height * width)) * 100;
+
+                    if (currentMisMatchPercent > returnEarlyThreshold) {
+                        skipTheRest = true;
+                    }
+                }
             });
 
-            data.rawMisMatchPercentage = mismatchCount / (height * width) * 100;
+            data.rawMisMatchPercentage = (mismatchCount / (height * width)) * 100;
             data.misMatchPercentage = data.rawMisMatchPercentage.toFixed(2);
             data.diffBounds = diffBounds;
             data.analysisTime = Date.now() - time;
 
-            data.getImageDataUrl = function(text) {
+            data.getImageDataUrl = function (text) {
+                if (compareOnly) {
+                    throw Error("No diff image available - ran in compareOnly mode");
+                }
+
                 var barHeight = 0;
 
                 if (text) {
@@ -654,8 +683,8 @@ URL: https://github.com/Huddle/Resemble.js
                 return hiddenCanvas.toDataURL("image/png");
             };
 
-            if (hiddenCanvas.toBuffer) {
-                data.getBuffer = function(includeOriginal) {
+            if (!compareOnly && hiddenCanvas.toBuffer) {
+                data.getBuffer = function (includeOriginal) {
                     if (includeOriginal) {
                         var imageWidth = hiddenCanvas.width + 2;
                         hiddenCanvas.width = imageWidth * 3;
@@ -702,9 +731,7 @@ URL: https://github.com/Huddle/Resemble.js
             var context;
 
             if (img.height < h || img.width < w) {
-                c = document.createElement("canvas");
-                c.width = w;
-                c.height = h;
+                c = createCanvas(w, h);
                 context = c.getContext("2d");
                 context.putImageData(img, 0, 0);
                 return context.getImageData(0, 0, w, h);
@@ -719,10 +746,7 @@ URL: https://github.com/Huddle/Resemble.js
             if (options.errorColor) {
                 for (key in options.errorColor) {
                     if (options.errorColor.hasOwnProperty(key)) {
-                        errorPixelColor[key] =
-                            options.errorColor[key] === void 0
-                                ? errorPixelColor[key]
-                                : options.errorColor[key];
+                        errorPixelColor[key] = options.errorColor[key] === void 0 ? errorPixelColor[key] : options.errorColor[key];
                     }
                 }
             }
@@ -732,16 +756,11 @@ URL: https://github.com/Huddle/Resemble.js
                 errorType = options.errorType;
             }
 
-            if (
-                options.errorPixel &&
-                typeof options.errorPixel === "function"
-            ) {
+            if (options.errorPixel && typeof options.errorPixel === "function") {
                 errorPixel = options.errorPixel;
             }
 
-            pixelTransparency = isNaN(Number(options.transparency))
-                ? pixelTransparency
-                : options.transparency;
+            pixelTransparency = isNaN(Number(options.transparency)) ? pixelTransparency : options.transparency;
 
             if (options.largeImageThreshold !== undefined) {
                 largeImageThreshold = options.largeImageThreshold;
@@ -752,11 +771,23 @@ URL: https://github.com/Huddle/Resemble.js
             }
 
             if (options.boundingBox !== undefined) {
-                boundingBox = options.boundingBox;
+                boundingBoxes = [options.boundingBox];
             }
 
             if (options.ignoredBox !== undefined) {
-                ignoredBox = options.ignoredBox;
+                ignoredBoxes = [options.ignoredBox];
+            }
+
+            if (options.boundingBoxes !== undefined) {
+                boundingBoxes = options.boundingBoxes;
+            }
+
+            if (options.ignoredBoxes !== undefined) {
+                ignoredBoxes = options.ignoredBoxes;
+            }
+
+            if (options.ignoreAreasColoredWith !== undefined) {
+                ignoreAreasColoredWith = options.ignoreAreasColoredWith;
             }
         }
 
@@ -771,25 +802,14 @@ URL: https://github.com/Huddle/Resemble.js
                 if (images.length === 2) {
                     if (images[0].error || images[1].error) {
                         data = {};
-                        data.error = images[0].error
-                            ? images[0].error
-                            : images[1].error;
+                        data.error = images[0].error ? images[0].error : images[1].error;
                         triggerDataUpdate();
                         return;
                     }
-                    width =
-                        images[0].width > images[1].width
-                            ? images[0].width
-                            : images[1].width;
-                    height =
-                        images[0].height > images[1].height
-                            ? images[0].height
-                            : images[1].height;
+                    width = images[0].width > images[1].width ? images[0].width : images[1].width;
+                    height = images[0].height > images[1].height ? images[0].height : images[1].height;
 
-                    if (
-                        images[0].width === images[1].width &&
-                        images[0].height === images[1].height
-                    ) {
+                    if (images[0].width === images[1].width && images[0].height === images[1].height) {
                         data.isSameDimensions = true;
                     } else {
                         data.isSameDimensions = false;
@@ -800,12 +820,7 @@ URL: https://github.com/Huddle/Resemble.js
                         height: images[0].height - images[1].height
                     };
 
-                    analyseImages(
-                        normalise(images[0], width, height),
-                        normalise(images[1], width, height),
-                        width,
-                        height
-                    );
+                    analyseImages(normalise(images[0], width, height), normalise(images[1], width, height), width, height);
 
                     triggerDataUpdate();
                 }
@@ -826,7 +841,14 @@ URL: https://github.com/Huddle/Resemble.js
             }
 
             var self = {
-                scaleToSameSize: function() {
+                setReturnEarlyThreshold: function (threshold) {
+                    if (threshold) {
+                        compareOnly = true;
+                        returnEarlyThreshold = threshold;
+                    }
+                    return self;
+                },
+                scaleToSameSize: function () {
                     scaleToSameSize = true;
 
                     if (hasMethod) {
@@ -834,7 +856,7 @@ URL: https://github.com/Huddle/Resemble.js
                     }
                     return self;
                 },
-                useOriginalSize: function() {
+                useOriginalSize: function () {
                     scaleToSameSize = false;
 
                     if (hasMethod) {
@@ -842,7 +864,7 @@ URL: https://github.com/Huddle/Resemble.js
                     }
                     return self;
                 },
-                ignoreNothing: function() {
+                ignoreNothing: function () {
                     tolerance.red = 0;
                     tolerance.green = 0;
                     tolerance.blue = 0;
@@ -858,7 +880,7 @@ URL: https://github.com/Huddle/Resemble.js
                     }
                     return self;
                 },
-                ignoreLess: function() {
+                ignoreLess: function () {
                     tolerance.red = 16;
                     tolerance.green = 16;
                     tolerance.blue = 16;
@@ -874,7 +896,7 @@ URL: https://github.com/Huddle/Resemble.js
                     }
                     return self;
                 },
-                ignoreAntialiasing: function() {
+                ignoreAntialiasing: function () {
                     tolerance.red = 32;
                     tolerance.green = 32;
                     tolerance.blue = 32;
@@ -890,7 +912,7 @@ URL: https://github.com/Huddle/Resemble.js
                     }
                     return self;
                 },
-                ignoreColors: function() {
+                ignoreColors: function () {
                     tolerance.alpha = 16;
                     tolerance.minBrightness = 16;
                     tolerance.maxBrightness = 240;
@@ -903,7 +925,7 @@ URL: https://github.com/Huddle/Resemble.js
                     }
                     return self;
                 },
-                ignoreAlpha: function() {
+                ignoreAlpha: function () {
                     tolerance.red = 16;
                     tolerance.green = 16;
                     tolerance.blue = 16;
@@ -919,26 +941,35 @@ URL: https://github.com/Huddle/Resemble.js
                     }
                     return self;
                 },
-                repaint: function() {
+                repaint: function () {
                     if (hasMethod) {
                         param();
                     }
                     return self;
                 },
-                outputSettings: function(options) {
+                outputSettings: function (options) {
                     outputSettings(options);
                     return self;
                 },
-                onComplete: function(callback) {
+                onComplete: function (callback) {
                     updateCallbackArray.push(callback);
 
-                    var wrapper = function() {
+                    var wrapper = function () {
                         compare(fileData, secondFileData);
                     };
 
                     wrapper();
 
                     return getCompareApi(wrapper);
+                },
+                setupCustomTolerance: function (customSettings) {
+                    for (var property in tolerance) {
+                        if (!customSettings.hasOwnProperty(property)) {
+                            continue;
+                        }
+
+                        tolerance[property] = customSettings[property];
+                    }
                 }
             };
 
@@ -946,24 +977,30 @@ URL: https://github.com/Huddle/Resemble.js
         }
 
         var rootSelf = {
-            onComplete: function(callback) {
+            onComplete: function (callback) {
                 updateCallbackArray.push(callback);
-                loadImageData(fileData, function(imageData, width, height) {
+                loadImageData(fileData, function (imageData, width, height) {
                     parseImage(imageData.data, width, height);
                 });
             },
-            compareTo: function(secondFileData) {
+            compareTo: function (secondFileData) {
                 return getCompareApi(secondFileData);
             },
-            outputSettings: function(options) {
+            outputSettings: function (options) {
                 outputSettings(options);
                 return rootSelf;
             }
         };
+
         return rootSelf;
     };
 
-    function applyIgnore(api, ignore) {
+    function setGlobalOutputSettings(settings) {
+        globalOutputSettings = settings;
+        return resemble;
+    }
+
+    function applyIgnore(api, ignore, customTolerance) {
         switch (ignore) {
             case "nothing":
                 api.ignoreNothing();
@@ -983,9 +1020,11 @@ URL: https://github.com/Huddle/Resemble.js
             default:
                 throw new Error("Invalid ignore: " + ignore);
         }
+
+        api.setupCustomTolerance(customTolerance);
     }
 
-    resemble.compare = function(image1, image2, options, cb) {
+    resemble.compare = function (image1, image2, options, cb) {
         var callback;
         var opt;
 
@@ -1006,19 +1045,24 @@ URL: https://github.com/Huddle/Resemble.js
 
         compare = res.compareTo(image2);
 
+        if (opt.returnEarlyThreshold) {
+            compare.setReturnEarlyThreshold(opt.returnEarlyThreshold);
+        }
+
         if (opt.scaleToSameSize) {
             compare.scaleToSameSize();
         }
 
+        var toleranceSettings = opt.tolerance || {};
         if (typeof opt.ignore === "string") {
-            applyIgnore(compare, opt.ignore);
+            applyIgnore(compare, opt.ignore, toleranceSettings);
         } else if (opt.ignore && opt.ignore.forEach) {
-            opt.ignore.forEach(function(v) {
-                applyIgnore(compare, v);
+            opt.ignore.forEach(function (v) {
+                applyIgnore(compare, v, toleranceSettings);
             });
         }
 
-        compare.onComplete(function(data) {
+        compare.onComplete(function (data) {
             if (data.error) {
                 callback(data.error);
             } else {

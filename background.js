@@ -45,7 +45,7 @@ function checkTabNabbing(activeInfo) {
 
     chrome.tabs.captureVisibleTab({format : "png"}, function(dataUrl){
       console.log("Should go to comparing.")
-      // if(chrome.runtime.lastError) return;
+      if(chrome.runtime.lastError) return;
       diffTab(dataUrl, mapping[activeInfo.tabId]);
     });
   }
