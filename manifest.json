@@ -1,13 +1,29 @@
 {
-    "name": "Extension Demo",
-    "version": "1.0",
+    "manifest_version": 3,
+    "name": "Highligh Tabnabbing",
+    "version": "0.1",    
     "description": "Built to mitigate Tabnabbing",
-    "permissions": ["activeTab"],
-    "browser_action": {
-        "default_popup": "popup.html",
-        "default_icon": {
-            "16": "img/blue.png"
+    "permissions": [
+        "tabs",
+        "activeTab"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },   
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "content_scripts": [
+        {
+          "matches": ["<all_urls>"],
+          "js": ["resemble.js"]
         }
-    },
-    "manifest_version": 3
+    ],
+    "action": {},
+    "icons": {
+        "16": "/assets/icon-16.png",
+        "32": "/assets/icon-32.png",
+        "48": "/assets/icon-48.png",
+        "128": "/assets/icon-128.png"
+    }    
 }
